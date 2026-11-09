@@ -5,9 +5,14 @@ import express, { Application, NextFunction, Request, Response } from "express"
 import cors from "cors"
 import helmet from "helmet"
 import rateLimit from "express-rate-limit"
-import { sequelize } from "./config/database"
+import { baseSequelize, defaultDatabaseUrl, sequelize } from "./config/database"
 import { seedSuperAdmin } from "./utils/admin.seed"
-import { initializeMasterControlPlane } from "./services/tenantProvisioner.service"
+import {
+  ensureDatabaseExistsOnServer,
+  initializeMasterControlPlane,
+  provisionTenantDatabaseSchema
+} from "./services/tenantProvisioner.service"
+import { extractDbNameFromUrl } from "./utils/dbNaming.utils"
 import { resolveTenantContext } from "./middlewares/tenant.middleware"
 import { cacheService } from "./services/cache.service"
 import { tenantPoolManager } from "./config/tenantPoolManager"
@@ -112,6 +117,7 @@ app.get("/health", (_req: Request, res: Response) => {
   res.status(200).json({
     status: "UP",
     service: "TimeFlow Enterprise Multi-Tenant SaaS API",
+    primaryDatabase: extractDbNameFromUrl(defaultDatabaseUrl),
     cache: cacheService.getStats(),
     pools: tenantPoolManager.getTelemetry(),
     developer: "shamodha.com",
@@ -158,9 +164,15 @@ const startServer = async () => {
       console.log(`[API] Multi-Tenant SaaS Server listening on port ${PORT}`)
     })
 
+    const primaryDbName = extractDbNameFromUrl(defaultDatabaseUrl)
+    await ensureDatabaseExistsOnServer(
+      defaultDatabaseUrl,
+      !defaultDatabaseUrl.includes("localhost")
+    )
     await sequelize.authenticate()
-    console.log("[DB] Primary PostgreSQL connected successfully.")
+    console.log(`[DB] Primary PostgreSQL (${primaryDbName}) connected successfully.`)
 
+    await provisionTenantDatabaseSchema(baseSequelize)
     await seedSuperAdmin()
     await initializeMasterControlPlane()
   } catch (error) {

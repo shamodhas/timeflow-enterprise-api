@@ -10,6 +10,12 @@ import { baseSequelize, defaultDatabaseUrl } from "../config/database"
 import { tenantPoolManager } from "../config/tenantPoolManager"
 import { runWithTenantContext } from "../config/tenantContext"
 import { encryptConnectionUrl, maskConnectionUrl } from "../utils/crypto.utils"
+import {
+  buildDbUrlWithDatabaseName,
+  extractDbNameFromUrl,
+  getPrimaryDbName,
+  getTenantDbName
+} from "../utils/dbNaming.utils"
 import { Department, Employee, LeaveLedger, LeaveType } from "../models"
 import { AccountStatus, TransactionType, UserRole } from "../types/database.enums"
 import { hashPassword } from "../utils/password"
@@ -180,6 +186,71 @@ export const provisionTenantDatabaseSchema = async (
     CREATE INDEX IF NOT EXISTS "idx_leave_ledger_emp_type" ON "leave_ledger" ("employee_id", "leave_type_id");
     CREATE INDEX IF NOT EXISTS "idx_employees_status_role" ON "employees" ("status", "role");
   `)
+}
+
+/**
+ * Ensures the target PostgreSQL database (e.g., `dev_timeflow_enterprise_db`,
+ * `timeflow_enterprise_db`, or `dev_timeflow_enterprise_<slug>_db`) exists on the
+ * server. If missing, connects to an administrative maintenance database on the same
+ * host and executes `CREATE DATABASE "<targetDbName>"`.
+ */
+export const ensureDatabaseExistsOnServer = async (
+  targetDbUrl: string,
+  sslRequired = true
+): Promise<boolean> => {
+  const targetDbName = extractDbNameFromUrl(targetDbUrl).replace(/[^a-zA-Z0-9_]/g, "")
+  if (!targetDbName) return false
+
+  // First check if the target database is already reachable
+  const initialCheck = await testDatabaseConnection(targetDbUrl, sslRequired)
+  if (initialCheck.connected) {
+    return true
+  }
+
+  const candidateAdminDbs = ["postgres", "neondb", "dev_db", getPrimaryDbName()]
+  const isLocal = targetDbUrl.includes("localhost") || targetDbUrl.includes("127.0.0.1")
+
+  for (const adminDb of candidateAdminDbs) {
+    if (adminDb === targetDbName) continue
+    const adminUrl = buildDbUrlWithDatabaseName(targetDbUrl, adminDb)
+    const adminSeq = new Sequelize(adminUrl, {
+      dialect: "postgres",
+      logging: false,
+      pool: { max: 1, min: 0, acquire: 8000, idle: 2000 },
+      dialectOptions: {
+        ssl:
+          !sslRequired || isLocal
+            ? false
+            : {
+                require: true,
+                rejectUnauthorized: false
+              }
+      }
+    })
+
+    try {
+      await adminSeq.authenticate()
+      const [existingRows]: any = await adminSeq.query(
+        `SELECT 1 FROM pg_database WHERE datname = :dbName`,
+        { replacements: { dbName: targetDbName } }
+      )
+
+      if (!existingRows || existingRows.length === 0) {
+        await adminSeq.query(`CREATE DATABASE "${targetDbName}"`)
+        console.log(`[DB Provisioner] Created database '${targetDbName}' on PostgreSQL host.`)
+      }
+      await adminSeq.close()
+      return true
+    } catch {
+      try {
+        await adminSeq.close()
+      } catch {
+        // Ignore close error
+      }
+    }
+  }
+
+  return false
 }
 
 export const testDatabaseConnection = async (
@@ -375,11 +446,32 @@ export const onboardNewTenant = async (input: OnboardTenantInput) => {
     throw new Error(`Workspace slug '${slug}' is already taken.`)
   }
 
-  const targetDbUrl = input.customDatabaseUrl?.trim() || defaultDatabaseUrl
-  const dbStrategy: TenantDbStrategy = input.customDatabaseUrl?.trim()
-    ? input.dbStrategy || "BYOD_CUSTOM"
-    : "DEFAULT_HOST"
   const sslRequired = input.dbSslRequired !== undefined ? input.dbSslRequired : true
+  let targetDbUrl: string
+  let dbStrategy: TenantDbStrategy
+
+  if (input.customDatabaseUrl?.trim()) {
+    targetDbUrl = input.customDatabaseUrl.trim()
+    dbStrategy = input.dbStrategy || "BYOD_CUSTOM"
+    await ensureDatabaseExistsOnServer(targetDbUrl, sslRequired)
+  } else {
+    const isolatedTenantDbName = getTenantDbName(slug)
+    const candidateManagedUrl = buildDbUrlWithDatabaseName(
+      defaultDatabaseUrl,
+      isolatedTenantDbName
+    )
+    const createdIsolatedDb = await ensureDatabaseExistsOnServer(
+      candidateManagedUrl,
+      sslRequired
+    )
+    if (createdIsolatedDb) {
+      targetDbUrl = candidateManagedUrl
+      dbStrategy = "DEDICATED_MANAGED"
+    } else {
+      targetDbUrl = defaultDatabaseUrl
+      dbStrategy = "DEFAULT_HOST"
+    }
+  }
 
   // 1. Verify database connectivity
   const connCheck = await testDatabaseConnection(targetDbUrl, sslRequired)

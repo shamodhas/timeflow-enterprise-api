@@ -49,8 +49,11 @@ PORT=3000
 NODE_ENV=development
 
 # Primary / Default Tenant & Control Plane PostgreSQL URL
-DATABASE_URL=postgresql://user:password@host:5432/timeflow_db?sslmode=require
-MASTER_DATABASE_URL=postgresql://user:password@host:5432/timeflow_master?sslmode=require
+# Development: dev_timeflow_enterprise_db | Production: timeflow_enterprise_db
+# Managed Tenant Isolated DBs: dev_timeflow_enterprise_<slug>_db (dev) / timeflow_enterprise_<slug>_db (prod)
+DB_NAME=dev_timeflow_enterprise_db
+DATABASE_URL=postgresql://user:password@host:5432/dev_timeflow_enterprise_db?sslmode=require
+MASTER_DATABASE_URL=postgresql://user:password@host:5432/dev_timeflow_enterprise_master_db?sslmode=require
 
 # Optional L2 Redis Cache (Automatically falls back to L1 Memory LRU if omitted)
 REDIS_URL=redis://localhost:6379
