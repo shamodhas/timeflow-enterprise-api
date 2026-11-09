@@ -2,11 +2,12 @@ import dotenv from "dotenv"
 dotenv.config()
 import { Sequelize } from "sequelize"
 import { getCurrentTenantContext } from "./tenantContext"
+import { getPrimaryDbName } from "../utils/dbNaming.utils"
 
 export const defaultDatabaseUrl =
   process.env.DATABASE_URL ||
   process.env.MASTER_DATABASE_URL ||
-  "postgresql://postgres:postgres@localhost:5432/timeflow_dev"
+  `postgresql://postgres:postgres@localhost:5432/${getPrimaryDbName()}`
 
 const isLocalDefault =
   defaultDatabaseUrl.includes("localhost") ||
