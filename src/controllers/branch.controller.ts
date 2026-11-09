@@ -2,6 +2,8 @@ import { Request, Response } from "express"
 import { UniqueConstraintError } from "sequelize"
 import { Branch } from "../models"
 import { isValidCoordinates } from "../utils/geo.utils"
+import { cacheService } from "../services/cache.service"
+import { getCurrentTenantId } from "../config/tenantContext"
 
 const validateBranch = (body: Record<string, unknown>) => {
   const name = typeof body.name === "string" ? body.name.trim() : ""
@@ -23,7 +25,15 @@ const validateBranch = (body: Record<string, unknown>) => {
 
 export const getBranches = async (_req: Request, res: Response): Promise<void> => {
   try {
-    const branches = await Branch.findAll({ order: [["name", "ASC"]] })
+    const tenantId = getCurrentTenantId()
+    const branches = await cacheService.getOrSet(
+      `tenant:${tenantId}:branches:all`,
+      600,
+      async () => {
+        const rows = await Branch.findAll({ order: [["name", "ASC"]] })
+        return rows.map((r) => r.toJSON())
+      }
+    )
     res.status(200).json(branches)
   } catch (error) {
     res.status(500).json({ message: "Failed to load branch locations." })
@@ -44,6 +54,7 @@ export const createBranch = async (
 
   try {
     const branch = await Branch.create(values)
+    await cacheService.invalidateTenantCache(getCurrentTenantId(), "branches")
     res.status(201).json(branch)
   } catch (error) {
     if (error instanceof UniqueConstraintError) {
@@ -76,6 +87,7 @@ export const updateBranch = async (
     }
 
     await branch.update({ ...values, isActive })
+    await cacheService.invalidateTenantCache(getCurrentTenantId(), "branches")
     res.status(200).json(branch)
   } catch (error) {
     if (error instanceof UniqueConstraintError) {

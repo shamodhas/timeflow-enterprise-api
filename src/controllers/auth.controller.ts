@@ -10,6 +10,13 @@ import {
 import { AuthRequest } from "../middlewares/authenticate"
 import { comparePassword, hashPassword } from "../utils/password"
 import { grantInitialLeaves } from "../utils/leave.grant"
+import {
+  getCurrentTenantContext,
+  getCurrentTenantId,
+  getCurrentTenantSlug
+} from "../config/tenantContext"
+import { registerUserInMasterLookup } from "../services/tenantProvisioner.service"
+import { cacheService } from "../services/cache.service"
 
 export const register = async (req: Request, res: Response): Promise<void> => {
   try {
@@ -36,7 +43,7 @@ export const register = async (req: Request, res: Response): Promise<void> => {
     const newEmployee: any = await Employee.create({
       employeeCode,
       fullName,
-      email,
+      email: email.trim().toLowerCase(),
       passwordHash,
       role: role || UserRole.EMPLOYEE,
       status: AccountStatus.PENDING,
@@ -44,6 +51,18 @@ export const register = async (req: Request, res: Response): Promise<void> => {
     })
 
     await grantInitialLeaves(newEmployee.id, null)
+
+    const tenantId = getCurrentTenantId()
+    const tenantSlug = getCurrentTenantSlug()
+    if (tenantId && tenantId !== "default") {
+      await registerUserInMasterLookup({
+        email: newEmployee.email,
+        tenantId,
+        tenantSlug,
+        role: newEmployee.role
+      })
+      await cacheService.invalidateTenantCache(tenantId, "dashboard")
+    }
 
     res
       .status(201)
@@ -65,7 +84,6 @@ export const completeRegistration = async (
       return
     }
 
-    // 1. Token eka valid da kiyala balanna
     let decoded: any
     try {
       decoded = verifyInviteToken(token)
@@ -74,7 +92,6 @@ export const completeRegistration = async (
       return
     }
 
-    // 2. Employee wa database eken ganna
     const employee: any = await Employee.findByPk(decoded.id)
 
     if (!employee) {
@@ -87,8 +104,7 @@ export const completeRegistration = async (
       return
     }
 
-    // 3. Aluth Password eka hash karala account eka ACTIVE karanawa
-    const passwordHash =await hashPassword(password)
+    const passwordHash = await hashPassword(password)
 
     await Employee.update(
       {
@@ -113,7 +129,8 @@ export const login = async (req: Request, res: Response): Promise<void> => {
       return
     }
 
-    const user: any = await Employee.findOne({ where: { email } })
+    const normalizedEmail = String(email).trim().toLowerCase()
+    const user: any = await Employee.findOne({ where: { email: normalizedEmail } })
 
     if (!user) {
       res.status(401).json({ message: "Invalid credentials" })
@@ -121,7 +138,6 @@ export const login = async (req: Request, res: Response): Promise<void> => {
     }
 
     const accountStatus = user.status
-    console.log(accountStatus, AccountStatus.ACTIVE)
 
     if (accountStatus !== AccountStatus.ACTIVE) {
       res.status(403).json({
@@ -137,8 +153,23 @@ export const login = async (req: Request, res: Response): Promise<void> => {
       return
     }
 
-    const token = generateToken({ id: user.id, role: user.role })
-    const refreshToken = generateRefreshToken({ id: user.id, role: user.role })
+    const tenantCtx = getCurrentTenantContext()
+    const tenantId = tenantCtx?.tenantId
+    const tenantSlug = tenantCtx?.tenantSlug
+    const tenantName = tenantCtx?.tenantName
+
+    const token = generateToken({
+      id: user.id,
+      role: user.role,
+      tenantId,
+      tenantSlug
+    })
+    const refreshToken = generateRefreshToken({
+      id: user.id,
+      role: user.role,
+      tenantId,
+      tenantSlug
+    })
 
     res.status(200).json({
       token,
@@ -149,7 +180,10 @@ export const login = async (req: Request, res: Response): Promise<void> => {
         fullName: user.fullName,
         email: user.email,
         role: user.role,
-        status: accountStatus
+        status: accountStatus,
+        tenantId,
+        tenantSlug,
+        tenantName
       }
     })
   } catch (error: any) {
@@ -178,7 +212,7 @@ export const googleLogin = async (
     }
 
     const user: any = await Employee.findOne({
-      where: { email: googleUser.email }
+      where: { email: String(googleUser.email).trim().toLowerCase() }
     })
 
     if (!user) {
@@ -197,8 +231,23 @@ export const googleLogin = async (
       return
     }
 
-    const enterpriseToken = generateToken({ id: user.id, role: user.role })
-    const refreshToken = generateRefreshToken({ id: user.id, role: user.role })
+    const tenantCtx = getCurrentTenantContext()
+    const tenantId = tenantCtx?.tenantId
+    const tenantSlug = tenantCtx?.tenantSlug
+    const tenantName = tenantCtx?.tenantName
+
+    const enterpriseToken = generateToken({
+      id: user.id,
+      role: user.role,
+      tenantId,
+      tenantSlug
+    })
+    const refreshToken = generateRefreshToken({
+      id: user.id,
+      role: user.role,
+      tenantId,
+      tenantSlug
+    })
 
     res.status(200).json({
       token: enterpriseToken,
@@ -209,7 +258,10 @@ export const googleLogin = async (
         fullName: user.fullName,
         email: user.email,
         role: user.role,
-        status: accountStatus
+        status: accountStatus,
+        tenantId,
+        tenantSlug,
+        tenantName
       }
     })
   } catch (error: any) {
@@ -230,7 +282,12 @@ export const refreshToken = async (
     }
 
     const decoded = verifyRefreshToken(token)
-    const newToken = generateToken({ id: decoded.id, role: decoded.role })
+    const newToken = generateToken({
+      id: decoded.id,
+      role: decoded.role,
+      tenantId: decoded.tenantId || getCurrentTenantId(),
+      tenantSlug: decoded.tenantSlug || getCurrentTenantSlug()
+    })
 
     res.status(200).json({ token: newToken })
   } catch (error) {
@@ -250,7 +307,13 @@ export const getMe = async (req: AuthRequest, res: Response): Promise<void> => {
       return
     }
 
-    res.status(200).json(user)
+    const tenantCtx = getCurrentTenantContext()
+    res.status(200).json({
+      ...user.toJSON(),
+      tenantId: tenantCtx?.tenantId,
+      tenantSlug: tenantCtx?.tenantSlug,
+      tenantName: tenantCtx?.tenantName
+    })
   } catch (error: any) {
     res.status(500).json({ error: error.message })
   }

@@ -1,13 +1,23 @@
 import { Response } from "express"
 import { Holiday } from "../models/Holiday"
 import { AuthRequest } from "../middlewares/authenticate"
+import { cacheService } from "../services/cache.service"
+import { getCurrentTenantId } from "../config/tenantContext"
 
 export const getHolidays = async (
   req: AuthRequest,
   res: Response
 ): Promise<void> => {
   try {
-    const holidays = await Holiday.findAll({ order: [["date", "ASC"]] })
+    const tenantId = getCurrentTenantId()
+    const holidays = await cacheService.getOrSet(
+      `tenant:${tenantId}:holidays`,
+      600,
+      async () => {
+        const rows = await Holiday.findAll({ order: [["date", "ASC"]] })
+        return rows.map((r) => r.toJSON())
+      }
+    )
     res.status(200).json(holidays)
   } catch (error: any) {
     res.status(500).json({ message: error.message })
@@ -30,6 +40,7 @@ export const createHoliday = async (
       return
     }
     const holiday = await Holiday.create({ name, date })
+    await cacheService.invalidateTenantCache(getCurrentTenantId(), "holidays")
     res.status(201).json(holiday)
   } catch (error: any) {
     res.status(500).json({ message: error.message })
@@ -46,6 +57,7 @@ export const deleteHoliday = async (
       res.status(404).json({ message: "Holiday not found." })
       return
     }
+    await cacheService.invalidateTenantCache(getCurrentTenantId(), "holidays")
     res.status(200).json({ message: "Holiday deleted." })
   } catch (error: any) {
     res.status(500).json({ message: error.message })

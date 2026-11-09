@@ -1,9 +1,16 @@
 import { Request, Response, NextFunction } from "express"
 import { UserRole } from "../types/database.enums"
 import { verifyToken } from "../utils/jwt"
+import type { TenantInfo } from "./tenant.middleware"
 
 export interface AuthRequest extends Request {
-  user?: { id: string; role: UserRole }
+  user?: {
+    id: string
+    role: UserRole
+    tenantId?: string
+    tenantSlug?: string
+  }
+  tenant?: TenantInfo
 }
 
 export const authenticate = (
@@ -20,7 +27,6 @@ export const authenticate = (
 
   try {
     const decoded = verifyToken(token)
-    console.log(decoded)
 
     if (!decoded?.id) {
       res.status(401).json({ message: "Unauthorized. Invalid token payload." })
