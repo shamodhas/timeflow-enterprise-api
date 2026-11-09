@@ -1,30 +1,36 @@
 import dotenv from "dotenv"
 dotenv.config()
 import { DataTypes, Model, Optional, Sequelize } from "sequelize"
+import { baseSequelize, defaultDatabaseUrl } from "./database"
 
 const masterDbUrl =
   process.env.MASTER_DATABASE_URL ||
   process.env.DATABASE_URL ||
-  "postgresql://postgres:postgres@localhost:5432/timeflow_master"
+  defaultDatabaseUrl
 
-export const masterSequelize = new Sequelize(masterDbUrl, {
-  dialect: "postgres",
-  logging: false,
-  pool: {
-    max: Number(process.env.MASTER_DB_POOL_MAX || 10),
-    min: 1,
-    acquire: 20000,
-    idle: 30000
-  },
-  dialectOptions: {
-    ssl: masterDbUrl.includes("localhost") || masterDbUrl.includes("127.0.0.1")
-      ? false
-      : {
-          require: true,
-          rejectUnauthorized: false
+export const masterSequelize: Sequelize =
+  masterDbUrl === defaultDatabaseUrl
+    ? baseSequelize
+    : new Sequelize(masterDbUrl, {
+        dialect: "postgres",
+        logging: false,
+        pool: {
+          max: Number(process.env.MASTER_DB_POOL_MAX || 10),
+          min: 1,
+          acquire: 20000,
+          idle: 30000
+        },
+        dialectOptions: {
+          ssl:
+            masterDbUrl.includes("localhost") ||
+            masterDbUrl.includes("127.0.0.1")
+              ? false
+              : {
+                  require: true,
+                  rejectUnauthorized: false
+                }
         }
-  }
-})
+      })
 
 export type TenantPlan = "FREE_TRIAL" | "STARTER" | "PRO" | "ENTERPRISE"
 export type TenantStatus = "ACTIVE" | "TRIAL" | "SUSPENDED"
@@ -122,17 +128,17 @@ SaasTenant.init(
       field: "primary_color"
     },
     plan: {
-      type: DataTypes.ENUM("FREE_TRIAL", "STARTER", "PRO", "ENTERPRISE"),
+      type: DataTypes.STRING(32),
       allowNull: false,
       defaultValue: "ENTERPRISE"
     },
     status: {
-      type: DataTypes.ENUM("ACTIVE", "TRIAL", "SUSPENDED"),
+      type: DataTypes.STRING(32),
       allowNull: false,
       defaultValue: "ACTIVE"
     },
     dbStrategy: {
-      type: DataTypes.ENUM("DEFAULT_HOST", "DEDICATED_MANAGED", "BYOD_CUSTOM"),
+      type: DataTypes.STRING(32),
       allowNull: false,
       defaultValue: "DEDICATED_MANAGED",
       field: "db_strategy"
