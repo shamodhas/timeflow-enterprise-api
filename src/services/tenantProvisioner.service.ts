@@ -267,18 +267,6 @@ export const initializeMasterControlPlane = async (): Promise<void> => {
   await masterSequelize.authenticate()
 
   await masterSequelize.query(`
-    DO $$ BEGIN
-      CREATE TYPE "enum_saas_tenants_plan" AS ENUM ('FREE_TRIAL', 'STARTER', 'PRO', 'ENTERPRISE');
-    EXCEPTION WHEN duplicate_object THEN null; END $$;
-
-    DO $$ BEGIN
-      CREATE TYPE "enum_saas_tenants_status" AS ENUM ('ACTIVE', 'TRIAL', 'SUSPENDED');
-    EXCEPTION WHEN duplicate_object THEN null; END $$;
-
-    DO $$ BEGIN
-      CREATE TYPE "enum_saas_tenants_db_strategy" AS ENUM ('DEFAULT_HOST', 'DEDICATED_MANAGED', 'BYOD_CUSTOM');
-    EXCEPTION WHEN duplicate_object THEN null; END $$;
-
     CREATE TABLE IF NOT EXISTS "saas_tenants" (
       "id" UUID PRIMARY KEY,
       "name" VARCHAR(255) NOT NULL,
@@ -286,9 +274,9 @@ export const initializeMasterControlPlane = async (): Promise<void> => {
       "domain" VARCHAR(255) UNIQUE,
       "logo_url" VARCHAR(500),
       "primary_color" VARCHAR(32) NOT NULL DEFAULT '#2563eb',
-      "plan" "enum_saas_tenants_plan" NOT NULL DEFAULT 'ENTERPRISE',
-      "status" "enum_saas_tenants_status" NOT NULL DEFAULT 'ACTIVE',
-      "db_strategy" "enum_saas_tenants_db_strategy" NOT NULL DEFAULT 'DEFAULT_HOST',
+      "plan" VARCHAR(32) NOT NULL DEFAULT 'ENTERPRISE',
+      "status" VARCHAR(32) NOT NULL DEFAULT 'ACTIVE',
+      "db_strategy" VARCHAR(32) NOT NULL DEFAULT 'DEFAULT_HOST',
       "db_url_encrypted" TEXT NOT NULL,
       "db_ssl_required" BOOLEAN NOT NULL DEFAULT true,
       "max_employees" INTEGER NOT NULL DEFAULT 250,
@@ -312,9 +300,6 @@ export const initializeMasterControlPlane = async (): Promise<void> => {
 
     CREATE INDEX IF NOT EXISTS "idx_saas_tenant_users_email" ON "saas_tenant_users" ("email");
   `)
-
-  // Ensure high-performance indexes exist on the default tenant database as well
-  await provisionTenantDatabaseSchema(baseSequelize)
 
   let defaultTenant = await SaasTenant.findOne({ where: { slug: "ijse" } })
   if (!defaultTenant) {
@@ -341,17 +326,27 @@ export const initializeMasterControlPlane = async (): Promise<void> => {
     baseSequelize
   )
 
-  // Sync existing employees from the default tenant DB into the master lookup index
-  const existingEmployees = await Employee.findAll({
-    attributes: ["email", "role"]
+  const existingLookupCount = await SaasTenantUserLookup.count({
+    where: { tenantId: defaultTenant.id }
   })
-  for (const emp of existingEmployees) {
-    await registerUserInMasterLookup({
-      email: emp.email,
-      tenantId: defaultTenant.id,
-      tenantSlug: defaultTenant.slug,
-      role: emp.role
+  if (existingLookupCount === 0) {
+    const existingEmployees = await Employee.findAll({
+      attributes: ["email", "role"]
     })
+    if (existingEmployees.length > 0) {
+      const bulkValues = existingEmployees
+        .filter((emp) => Boolean(emp.email))
+        .map((emp) => ({
+          email: emp.email.trim().toLowerCase(),
+          tenantId: defaultTenant!.id,
+          tenantSlug: defaultTenant!.slug,
+          role: emp.role
+        }))
+
+      await SaasTenantUserLookup.bulkCreate(bulkValues, {
+        ignoreDuplicates: true
+      })
+    }
   }
 
   console.log(

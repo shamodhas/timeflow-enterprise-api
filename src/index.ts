@@ -150,21 +150,24 @@ app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
   })
 })
 
+export { app }
+
 const startServer = async () => {
   try {
+    app.listen(PORT, () => {
+      console.log(`[API] Multi-Tenant SaaS Server listening on port ${PORT}`)
+    })
+
     await sequelize.authenticate()
     console.log("[DB] Primary PostgreSQL connected successfully.")
 
     await seedSuperAdmin()
     await initializeMasterControlPlane()
-
-    app.listen(PORT, () => {
-      console.log(`[API] Multi-Tenant SaaS Server listening on port ${PORT}`)
-    })
   } catch (error) {
     console.error("[DB] Connection error:", error)
-    process.exit(1)
   }
 }
 
-startServer()
+if (require.main === module) {
+  void startServer()
+}
