@@ -14,12 +14,16 @@ const JWT_ENCRIPTION_SECRET =
 export interface JwtPayload {
   id: string
   role: UserRole
+  tenantId?: string
+  tenantSlug?: string
   sub?: string
 }
 
 export interface InvitePayload {
   id: string
   email: string
+  tenantId?: string
+  tenantSlug?: string
 }
 
 export const generateToken = (payload: JwtPayload): string => {
@@ -41,7 +45,7 @@ export const generateRefreshToken = (payload: JwtPayload): string => {
 export const generateInviteToken = (payload: InvitePayload): string => {
   return jwt.sign(
     payload,
-    JWT_ENCRIPTION_SECRET, 
+    JWT_ENCRIPTION_SECRET,
     { expiresIn: "3d" }
   )
 }
@@ -59,4 +63,13 @@ export const verifyRefreshToken = (token: string): JwtPayload => {
 
 export const verifyInviteToken = (token: string): InvitePayload => {
   return jwt.verify(token, JWT_ENCRIPTION_SECRET) as InvitePayload
+}
+
+export const decodeTokenUnsafe = (token: string): Partial<JwtPayload & InvitePayload> | null => {
+  try {
+    const decoded = jwt.decode(token)
+    return decoded && typeof decoded === "object" ? (decoded as any) : null
+  } catch {
+    return null
+  }
 }

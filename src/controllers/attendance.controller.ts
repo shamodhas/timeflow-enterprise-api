@@ -23,6 +23,8 @@ import {
   notifyEmployeeToFillReason,
   notifyAdminsReasonSubmitted
 } from "../utils/email"
+import { cacheService } from "../services/cache.service"
+import { getCurrentTenantId } from "../config/tenantContext"
 
 const hasInvalidFailureReason = (reason?: string): boolean =>
   reason !== undefined &&
@@ -73,7 +75,15 @@ const verifyAttendanceLocation = async (
   longitude?: number,
   locationFailureReason?: string
 ): Promise<AttendanceLocationCheckResult> => {
-  const branches = await Branch.findAll({ where: { isActive: true } })
+  const tenantId = getCurrentTenantId()
+  const branches = await cacheService.getOrSet(
+    `tenant:${tenantId}:branches:active`,
+    600,
+    async () => {
+      const rows = await Branch.findAll({ where: { isActive: true } })
+      return rows.map((r) => r.toJSON() as Branch)
+    }
+  )
   const validCoords = isValidCoordinates(latitude, longitude)
   const userLat = validCoords ? Number(latitude) : null
   const userLng = validCoords ? Number(longitude) : null
@@ -258,6 +268,8 @@ export const clockIn = async (
       clockInLocationFailureReason: locationResult.failureReason,
       clockInLocationFailedAt: locationResult.failedAt
     })
+
+    await cacheService.invalidateTenantCache(getCurrentTenantId(), "dashboard")
 
     // If location verification failed, dispatch notification emails asynchronously
     if (!locationResult.locationVerified) {

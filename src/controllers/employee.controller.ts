@@ -7,6 +7,9 @@ import { generateInviteToken } from "../utils/jwt"
 import { sendInviteEmail } from "../utils/email"
 import { hashPassword } from "../utils/password"
 import { grantInitialLeaves } from "../utils/leave.grant"
+import { getCurrentTenantId, getCurrentTenantSlug } from "../config/tenantContext"
+import { registerUserInMasterLookup } from "../services/tenantProvisioner.service"
+import { cacheService } from "../services/cache.service"
 
 export const createEmployee = async (
   req: AuthRequest,
@@ -41,6 +44,19 @@ export const createEmployee = async (
     await grantInitialLeaves(newEmployee.id, initialLeaves, t)
 
     await t.commit()
+
+    const tenantId = getCurrentTenantId()
+    const tenantSlug = getCurrentTenantSlug()
+    if (tenantId && tenantId !== "default") {
+      await registerUserInMasterLookup({
+        email: newEmployee.email,
+        tenantId,
+        tenantSlug,
+        role: newEmployee.role
+      })
+      await cacheService.invalidateTenantCache(tenantId, "dashboard")
+    }
+
     res.status(201).json({
       message: "Employee and initial leave balances created successfully.",
       employee: newEmployee
@@ -85,14 +101,29 @@ export const inviteEmployee = async (
 
     await grantInitialLeaves(newEmployee.id, initialLeaves, t)
 
+    const tenantId = getCurrentTenantId()
+    const tenantSlug = getCurrentTenantSlug()
+
     const inviteToken = generateInviteToken({
       id: newEmployee.id,
-      email: newEmployee.email
+      email: newEmployee.email,
+      tenantId,
+      tenantSlug
     })
 
     await sendInviteEmail(email, fullName, employeeCode, inviteToken)
 
     await t.commit()
+
+    if (tenantId && tenantId !== "default") {
+      await registerUserInMasterLookup({
+        email: newEmployee.email,
+        tenantId,
+        tenantSlug,
+        role: newEmployee.role
+      })
+      await cacheService.invalidateTenantCache(tenantId, "dashboard")
+    }
 
     res.status(201).json({
       message: "Employee invited successfully. Invitation email sent.",

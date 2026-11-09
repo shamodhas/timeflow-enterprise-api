@@ -7,9 +7,14 @@ import helmet from "helmet"
 import rateLimit from "express-rate-limit"
 import { sequelize } from "./config/database"
 import { seedSuperAdmin } from "./utils/admin.seed"
+import { initializeMasterControlPlane } from "./services/tenantProvisioner.service"
+import { resolveTenantContext } from "./middlewares/tenant.middleware"
+import { cacheService } from "./services/cache.service"
+import { tenantPoolManager } from "./config/tenantPoolManager"
 import "./models"
 
 import authRoutes from "./routes/auth.routes"
+import tenantRoutes from "./routes/tenant.routes"
 import departmentRoutes from "./routes/department.routes"
 import employeeRoutes from "./routes/employee.routes"
 import attendanceRoutes from "./routes/attendance.routes"
@@ -63,7 +68,8 @@ app.use(
         !origin ||
         allowedOrigins.includes(origin) ||
         origin.includes("ngrok-free.app") ||
-        origin.includes("loca.lt")
+        origin.includes("loca.lt") ||
+        origin.includes("localhost")
       ) {
         callback(null, true)
       } else {
@@ -72,7 +78,13 @@ app.use(
     },
     credentials: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE"],
-    allowedHeaders: ["Content-Type", "Authorization", "bypass-tunnel-reminder"]
+    allowedHeaders: [
+      "Content-Type",
+      "Authorization",
+      "bypass-tunnel-reminder",
+      "x-tenant-id",
+      "x-workspace-slug"
+    ]
   })
 )
 
@@ -81,31 +93,36 @@ app.use(express.urlencoded({ extended: true }))
 
 app.use((req: Request, res: Response, next: NextFunction) => {
   res.setHeader("X-Developed-By", "shamodha.com")
-  res.setHeader("X-Company", "IJSE - Institute of Software Engineering")
+  res.setHeader("X-Platform", "TimeFlow Enterprise Multi-Tenant SaaS")
   next()
 })
 
-app.get("/", (req: Request, res: Response) => {
+app.get("/", (_req: Request, res: Response) => {
   res.status(200).json({
     status: "UP",
-    name: "IJSE HRM and Attendance API",
-    organization: "Institute of Software Engineering",
+    name: "TimeFlow Enterprise Multi-Tenant SaaS API",
+    architecture: "Isolated Database-per-Tenant + BYOD + L1/L2 Cache",
     developer: "shamodha.com",
     developerUrl: "https://shamodha.com",
-    version: "1.0.0"
+    version: "2.0.0"
   })
 })
 
-app.get("/health", (req: Request, res: Response) => {
+app.get("/health", (_req: Request, res: Response) => {
   res.status(200).json({
     status: "UP",
-    service: "IJSE HRM and Attendance API",
-    organization: "Institute of Software Engineering",
+    service: "TimeFlow Enterprise Multi-Tenant SaaS API",
+    cache: cacheService.getStats(),
+    pools: tenantPoolManager.getTelemetry(),
     developer: "shamodha.com",
     developerUrl: "https://shamodha.com"
   })
 })
 
+// Resolve Tenant Context & Bind Warm Isolated Sequelize Pool via AsyncLocalStorage
+app.use("/api/v1", resolveTenantContext)
+
+app.use("/api/v1/tenants", tenantRoutes)
 app.use("/api/v1/auth", authRoutes)
 app.use("/api/v1/departments", departmentRoutes)
 app.use("/api/v1/employees", employeeRoutes)
@@ -121,7 +138,7 @@ app.use("*", (req: Request, res: Response) => {
   res.status(404).json({ message: `Route ${req.originalUrl} not found` })
 })
 
-app.use((err: any, req: Request, res: Response, next: NextFunction) => {
+app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
   console.error("[Global Error]", err.stack)
 
   const isProduction = process.env.NODE_ENV === "production"
@@ -136,17 +153,13 @@ app.use((err: any, req: Request, res: Response, next: NextFunction) => {
 const startServer = async () => {
   try {
     await sequelize.authenticate()
-    console.log("[DB] PostgreSQL connected successfully.")
-
-    // await sequelize.sync({ force: true });
-
-    // await sequelize.sync({ alter: true });
-    // console.log("[DB] Database tables synchronized.");
+    console.log("[DB] Primary PostgreSQL connected successfully.")
 
     await seedSuperAdmin()
+    await initializeMasterControlPlane()
 
     app.listen(PORT, () => {
-      console.log(`[API] Server listening on port ${PORT}`)
+      console.log(`[API] Multi-Tenant SaaS Server listening on port ${PORT}`)
     })
   } catch (error) {
     console.error("[DB] Connection error:", error)

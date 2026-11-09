@@ -1,38 +1,53 @@
-import { Request, Response } from "express"
-import { Attendance, LeaveRequest, LeaveLedger, LeaveType, Employee, Branch } from "../models"
+import { Response } from "express"
+import { Attendance, LeaveRequest, LeaveLedger, LeaveType, Employee } from "../models"
 import { Op } from "sequelize"
 import { AuthRequest } from "../middlewares/authenticate"
 import { TransactionType } from "../types/database.enums"
 import { getCurrentLKDateString, getDayBoundsUTC } from "../utils/time"
+import { cacheService } from "../services/cache.service"
+import { getCurrentTenantId } from "../config/tenantContext"
 
-// Company Overview Stats (Admin & HR)
+// Company Overview Stats (Admin & HR) - Cached for 30s with instant invalidation on mutations
 export const getDashboardStats = async (
   req: AuthRequest,
   res: Response
 ): Promise<void> => {
   try {
+    const tenantId = getCurrentTenantId()
     const todayDateStr = getCurrentLKDateString()
-    const { startUTC, endUTC } = getDayBoundsUTC(todayDateStr)
 
-    const [presentTodayCount, pendingCount, onLeaveCount, totalEmployees] = await Promise.all([
-      Attendance.count({ where: { createdAt: { [Op.between]: [startUTC, endUTC] } } }),
-      LeaveRequest.count({ where: { status: "PENDING" } }),
-      LeaveRequest.count({
-        where: {
-          status: "APPROVED",
-          startDate: { [Op.lte]: todayDateStr },
-          endDate: { [Op.gte]: todayDateStr }
+    const stats = await cacheService.getOrSet(
+      `tenant:${tenantId}:dashboard:overview:${todayDateStr}`,
+      30,
+      async () => {
+        const { startUTC, endUTC } = getDayBoundsUTC(todayDateStr)
+
+        const [presentTodayCount, pendingCount, onLeaveCount, totalEmployees] =
+          await Promise.all([
+            Attendance.count({
+              where: { createdAt: { [Op.between]: [startUTC, endUTC] } }
+            }),
+            LeaveRequest.count({ where: { status: "PENDING" } }),
+            LeaveRequest.count({
+              where: {
+                status: "APPROVED",
+                startDate: { [Op.lte]: todayDateStr },
+                endDate: { [Op.gte]: todayDateStr }
+              }
+            }),
+            Employee.count()
+          ])
+
+        return {
+          presentToday: presentTodayCount,
+          onLeave: onLeaveCount,
+          pendingApprovals: pendingCount,
+          totalEmployees
         }
-      }),
-      Employee.count()
-    ])
+      }
+    )
 
-    res.status(200).json({
-      presentToday: presentTodayCount,
-      onLeave: onLeaveCount,
-      pendingApprovals: pendingCount,
-      totalEmployees
-    })
+    res.status(200).json(stats)
   } catch (error: any) {
     res.status(500).json({ error: error.message })
   }
@@ -110,7 +125,6 @@ export const getMyDashboardStats = async (
       }
     })
 
-    // Counts of approved leave requests per leave type, split by session
     approvedRequests.forEach((request: any) => {
       const entry = byType.get(request.leaveTypeId)
       if (!entry) return
