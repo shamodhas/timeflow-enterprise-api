@@ -1,0 +1,32 @@
+services:
+  - type: web
+    name: timeflow-api
+    runtime: node
+    plan: free
+    region: singapore
+    buildCommand: npm ci && npm run build
+    startCommand: npm run start
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      - key: DATABASE_URL
+        value: postgresql://neondb_owner:npg_TXNvR9g7HWYJ@ep-steep-bread-arwu78em.c-4.us-west-2.aws.neon.tech/dev_db?sslmode=require
+      - key: DB_NAME
+        value: dev_db
+      - key: JWT_SECRET
+        value: 491b9ec9f3a0589927957d5a5fd1006f2c7b3333882a43573101c49ebdf170e9
+      - key: JWT_REFRESH_SECRET
+        value: cec8c47870bca543ad5f38540cc1ffb9619e4c43a20fbd165a654c5a771aa141
+      - key: JWT_ENCRIPTION_SECRET
+        value: 9b62003abec9f1a292233c51c6aac4c5171b7b14ab3884698d6854e48c935146
+      - key: GOOGLE_CLIENT_ID
+        value: 669294465162-un3dna9k1rk3fhst1itnjejl3nodgavj.apps.googleusercontent.com
+      - key: EMAIL_USER
+        value: shamodha7@gmail.com
+      - key: EMAIL_PASS
+        value: njtm bflh bibc ftqj
+      - key: FRONTEND_URL
+        value: https://timeflow.ijse.shamodha.com
